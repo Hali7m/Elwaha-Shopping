@@ -1,0 +1,872 @@
+<?php
+/**
+ * ============================================================================
+ * VENTI QUATTRO — ACCUEIL
+ * ============================================================================
+ * Le panier (localStorage "vq_cart") est PARTAGÉ entre index.php, boutique.php
+ * et produit.php : les entrées sont indexées par "productId:sizeId" et la
+ * liste PRODUCTS doit donc contenir les vrais produits de la base (avec leurs
+ * tailles), sinon le panier rempli sur une autre page ne peut plus être
+ * retrouvé/affiché ici (c'était le bug : cette page utilisait un tableau
+ * PRODUCTS fictif p1..p18 et un panier "id => qty" sans taille).
+ * ============================================================================
+ */
+require_once __DIR__ . '/config.php';
+
+$pdo = db();
+
+// ---- Produits actifs + catégorie ------------------------------------------
+$productsStmt = $pdo->query(
+    "SELECT p.id, p.name, p.description, p.color, p.size_type,
+            p.price, p.sale_price, p.is_new,
+            c.slug AS category_slug, c.icon AS category_icon
+       FROM products p
+       JOIN categories c ON c.id = p.category_id
+      WHERE p.is_active = 1
+      ORDER BY p.id ASC"
+);
+$productRows = $productsStmt->fetchAll();
+
+// ---- Image principale de chaque produit (vraie photo en priorité) --------
+$imagesStmt = $pdo->query(
+    "SELECT product_id, image_path, is_placeholder
+       FROM product_images
+      ORDER BY product_id ASC, is_placeholder ASC, sort_order ASC"
+);
+$imageByProduct = [];
+foreach ($imagesStmt->fetchAll() as $img) {
+    if (!isset($imageByProduct[$img['product_id']])) {
+        $imageByProduct[$img['product_id']] = $img;
+    }
+}
+
+// ---- Tailles + stock de chaque produit -------------------------------------
+$sizesStmt = $pdo->query(
+    "SELECT ps.id AS product_size_id, ps.product_id, ps.stock_quantity,
+            s.label
+       FROM product_sizes ps
+       JOIN sizes s ON s.id = ps.size_id
+      ORDER BY ps.product_id ASC, s.sort_order ASC"
+);
+$sizesByProduct = [];
+foreach ($sizesStmt->fetchAll() as $row) {
+    $sizesByProduct[$row['product_id']][] = [
+        'id'    => (int) $row['product_size_id'],
+        'label' => $row['label'],
+        'stock' => (int) $row['stock_quantity'],
+    ];
+}
+
+// ---- Assemblage final pour le JS (identique à boutique.php / produit.php) --
+$productsForJs = [];
+foreach ($productRows as $row) {
+    $pid   = (int) $row['id'];
+    $image = $imageByProduct[$pid] ?? null;
+    $sizes = $sizesByProduct[$pid] ?? [];
+    $totalStock = array_sum(array_column($sizes, 'stock'));
+
+    $onSale = $row['sale_price'] !== null && (int) $row['sale_price'] < (int) $row['price'];
+
+    $productsForJs[] = [
+        'id'          => (string) $pid,
+        'category'    => $row['category_slug'],
+        'name'        => $row['name'],
+        'desc'        => $row['description'] ?? '',
+        'color'       => $row['color'],
+        'sizeType'    => $row['size_type'],
+        'price'       => $onSale ? (int) $row['sale_price'] : (int) $row['price'],
+        'regularPrice'=> (int) $row['price'],
+        'onSale'      => $onSale,
+        'hasPhoto'    => $image !== null && (int) $image['is_placeholder'] === 0,
+        'img'         => ($image !== null && (int) $image['is_placeholder'] === 0) ? 'admin/' .  $image['image_path'] : null,
+        'icon'        => $row['category_icon'],
+        'isNew'       => (bool) $row['is_new'],
+        'sizes'       => $sizes,
+        'inStock'     => $totalStock > 0,
+        'stock'       => $totalStock,
+    ];
+}
+?>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Venti Quattro — Clothing Retail, Alger</title>
+<meta name="description" content="Venti Quattro — Streetwear & sneakers à Alger. Nouveautés chaque semaine, livraison dans les 58 wilayas.">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Venti Quattro">
+<meta property="og:title" content="Venti Quattro — Clothing Retail, Alger">
+<meta property="og:description" content="Streetwear & sneakers à Alger. Nouveautés chaque semaine, livraison dans les 58 wilayas.">
+<meta property="og:image" content="<?php echo h(abs_url('assets/images/logo.jpg')); ?>">
+<meta property="og:url" content="<?php echo h(abs_url('index.php')); ?>">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Venti Quattro — Clothing Retail, Alger">
+<meta name="twitter:description" content="Streetwear & sneakers à Alger. Nouveautés chaque semaine, livraison dans les 58 wilayas.">
+<meta name="twitter:image" content="<?php echo h(abs_url('assets/images/logo.jpg')); ?>">
+
+<script type="application/ld+json">
+<?php echo json_encode([
+    '@context'  => 'https://schema.org',
+    '@type'     => 'ClothingStore',
+    'name'      => SHOP_NAME,
+    'image'     => abs_url('assets/images/logo.jpg'),
+    'url'       => abs_url('index.php'),
+    'telephone' => '+' . SHOP_WHATSAPP,
+    'address'   => [
+        '@type'           => 'PostalAddress',
+        'addressLocality' => 'Alger',
+        'addressCountry'  => 'DZ',
+    ],
+    'sameAs' => [
+        'https://www.instagram.com/venti_quattro/',
+        'https://www.tiktok.com/@venti.quattro7',
+    ],
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>
+</script>
+
+<link rel="icon" type="image/png" sizes="16x16" href="assets/images/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/images/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/images/android-chrome-192x192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="assets/images/android-chrome-512x512.png">
+<link rel="shortcut icon" href="assets/images/favicon.ico">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/images/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<style>
+  /* ==================== LATEST PRODUCTS CAROUSEL ==================== */
+  .latest-products{ position:relative; overflow:hidden; padding:120px 0; background:var(--charcoal,#141110); }
+  .latest-products .eyebrow, .latest-products h2, .latest-products p{ color:#f3ecdd; }
+  .latest-products .section-head p{ color:rgba(243,236,221,0.62); }
+
+  .carousel{ position:relative; display:flex; align-items:center; gap:14px; margin-top:56px; }
+  .carousel-viewport{ flex:1 1 auto; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x mandatory; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  .carousel-viewport::-webkit-scrollbar{ display:none; }
+  .carousel-track{ display:flex; gap:20px; padding:6px 2px 26px; }
+
+  .carousel-btn{ flex:0 0 auto; width:52px; height:52px; border-radius:50%; border:1.5px solid rgba(243,236,221,0.25); background:rgba(243,236,221,0.05); color:#f3ecdd; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background .2s ease, border-color .2s ease, transform .2s ease; }
+  .carousel-btn svg{ width:22px; height:22px; }
+  .carousel-btn:hover{ background:var(--red,#e2323a); border-color:var(--red,#e2323a); transform:scale(1.06); }
+  .carousel-btn:active{ transform:scale(0.96); }
+  .carousel-btn:disabled{ opacity:0.3; cursor:default; pointer-events:none; }
+  html[dir="rtl"] .carousel-btn-prev svg, html[dir="rtl"] .carousel-btn-next svg{ transform:scaleX(-1); }
+
+  .carousel-dots{ display:flex; justify-content:center; gap:8px; margin-top:12px; }
+  .carousel-dots span{ width:6px; height:6px; border-radius:50%; background:rgba(243,236,221,0.25); transition:background .2s ease, width .2s ease; }
+  .carousel-dots span.active{ background:var(--gold,#d9a65c); width:20px; border-radius:4px; }
+
+  .product-card{ scroll-snap-align:start; flex:0 0 auto; width:340px; display:flex; flex-direction:column; background:rgba(243,236,221,0.04); border:1px solid rgba(243,236,221,0.12); border-radius:14px; overflow:hidden; text-decoration:none; transition:transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+  .product-card:hover{ transform:translateY(-6px); border-color:rgba(217,166,92,0.5); box-shadow:0 18px 34px rgba(0,0,0,0.35); }
+  .product-card-media{ position:relative; width:100%; aspect-ratio:4/5; background:#1d1a18; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .product-card-media img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .product-card-media svg{ width:44%; height:44%; color:rgba(243,236,221,0.3); }
+  .product-card-badges{ position:absolute; top:10px; left:10px; display:flex; flex-direction:column; gap:6px; z-index:2; }
+  html[dir="rtl"] .product-card-badges{ left:auto; right:10px; }
+  .product-card-badge{ font-family:'Bebas Neue',sans-serif; letter-spacing:0.06em; font-size:0.72rem; padding:4px 9px; border-radius:100px; color:#141110; }
+  .product-card-badge.new{ background:var(--gold,#d9a65c); }
+  .product-card-badge.sale{ background:var(--red,#e2323a); color:#f3ecdd; }
+  .product-card-body{ padding:14px 16px 18px; display:flex; flex-direction:column; gap:6px; }
+  .product-card-name{ font-family:'Inter',sans-serif; font-weight:700; font-size:0.95rem; color:#f3ecdd; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .product-card-prices{ display:flex; align-items:baseline; gap:8px; }
+  .product-card-price{ font-family:'Anton',sans-serif; letter-spacing:0.02em; font-size:1.15rem; color:var(--gold,#d9a65c); }
+  .product-card-price-old{ font-family:'Inter',sans-serif; font-size:0.8rem; color:rgba(243,236,221,0.4); text-decoration:line-through; }
+
+  @media (max-width: 720px){
+    .carousel{ gap:0; }
+    /* En dessous de 720px, on retire les flèches et on ne garde que le swipe
+       tactile natif (la viewport est déjà un scroll-snap horizontal) : ça
+       libère toute la largeur pour des cartes plus grandes. */
+    .carousel-btn{ display:none; }
+    .product-card{ width:238px; }
+  }
+
+  /* ==================== SOCIAL ICON ROW ==================== */
+  .social-icon-row{ display:flex; align-items:center; gap:12px; margin-top:18px; }
+  .social-icon-btn{ width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(243,236,221,0.06); border:1px solid rgba(243,236,221,0.16); color:#f3ecdd; transition:background .2s ease, transform .2s ease, border-color .2s ease; }
+  .social-icon-btn svg{ width:19px; height:19px; }
+  .social-icon-btn:hover{ transform:translateY(-3px); border-color:transparent; }
+  .social-icon-btn.ig:hover{ background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af,#515bd4); }
+  .social-icon-btn.tiktok:hover{ background:#000; border-color:#25f4ee; }
+  .social-icon-btn.wa:hover{ background:#25D366; }
+  .social-icon-btn.fb:hover{ background:#1877F2; }
+  .social-icon-btn.phone:hover{ background:var(--gold,#d9a65c); color:#141110; }
+</style>
+</head>
+<body>
+
+<?php $activePage = 'home'; include __DIR__ . '/includes/header.php'; ?>
+
+<div class="overlay" id="overlay"></div>
+<?php include __DIR__ . '/includes/cart-drawer.php'; ?>
+
+<main id="top">
+
+  <section class="hero" style="padding-bottom:0;">
+    <div class="hero-bg"></div>
+    <div class="wrap hero-grid">
+      <div class="hero-tag">
+        <span class="hero-tag-num">24</span>
+        <small>Streetwear</small>
+      </div>
+      <div class="hero-copy">
+        <span class="eyebrow" data-i18n="hero_eyebrow">Clothing Retail — Alger</span>
+        <h1>
+          <span data-i18n="hero_title1" style="display:block;">Porté à Alger,</span>
+          <span data-i18n="hero_title1b" style="display:block;">reconnu dans la rue.</span>
+          <span data-i18n="hero_title2">Streetwear · Sneakers · 24</span>
+        </h1>
+        <p class="lead" data-i18n="hero_lead">Chaque pièce est choisie pour avoir de l'allure dehors. Nouveautés chaque semaine, livraison vers les 58 wilayas.</p>
+        <div class="hero-actions">
+          <a href="boutique.php" class="btn btn-solid" data-i18n="hero_btn1">Voir la Boutique</a>
+          <a href="https://wa.me/213549717507" target="_blank" rel="noopener" class="btn btn-ghost" data-i18n="hero_btn2">Contacnter nous</a>
+        </div>
+      </div>
+    </div>
+  </section>
+      <div class="marquee-stack">
+        <div class="marquee">
+          <div class="marquee-track" id="marqueeTrack">
+            <span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq4">VENTI QUATTRO 24</span>
+          </div>
+        </div>
+        <div class="marquee dark">
+          <div class="marquee-track">
+            <span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span><span data-i18n="mq4">VENTI QUATTRO 24</span><span data-i18n="mq3">SNEAKERS</span><span data-i18n="mq1">NOUVELLE COLLECTION</span><span data-i18n="mq2">LIVRAISON 58 WILAYA</span>
+          </div>
+        </div>
+      </div>
+
+  <section id="collections" style="position:relative;">
+    <svg width="260" height="260" viewBox="0 0 260 260" style="position:absolute; top:40px; right:60px; opacity:0.5; z-index:0; pointer-events:none;" aria-hidden="true">
+      <circle cx="130" cy="130" r="90" fill="none" stroke="#ff2f6d" stroke-width="2" stroke-dasharray="3 10"/>
+      <path d="M40 90 Q60 40 120 50 Q100 20 150 15" stroke="#d9a65c" stroke-width="2" fill="none" opacity="0.6"/>
+      <circle cx="205" cy="75" r="4" fill="#ff2f6d" opacity="0.7"/>
+      <circle cx="195" cy="60" r="2.5" fill="#ff2f6d" opacity="0.5"/>
+    </svg>
+    <svg width="220" height="220" viewBox="0 0 220 220" style="position:absolute; bottom:-10px; left:40px; opacity:0.4; z-index:0; pointer-events:none;" aria-hidden="true">
+      <rect x="60" y="60" width="100" height="100" fill="none" stroke="var(--tape-teal)" stroke-width="2" stroke-dasharray="4 9" transform="rotate(45 110 110)"/>
+      <circle cx="110" cy="110" r="6" fill="var(--tape-teal)" opacity="0.6"/>
+      <path d="M30 180 Q50 160 40 140" stroke="var(--gold)" stroke-width="1.5" fill="none" opacity="0.5"/>
+    </svg>
+    <div class="wrap" style="position:relative; z-index:1;">
+      <div class="section-head" style="max-width:640px; margin-left:auto; margin-right:auto; text-align:center;">
+        <span class="eyebrow" data-i18n="latest_eyebrow">Fraîchement arrivé</span>
+        <h2 data-i18n="latest_title">Les 20 dernières pièces.</h2>
+        <p data-i18n="latest_desc">Ce qui vient d'arriver en boutique, avant que ça ne reparte.</p>
+      </div>
+          <span class="graffiti-tag" aria-hidden="true" style="position:absolute; top:20%; left:-2%; z-index:0; font-size:clamp(3rem,9vw,7.5rem); color:rgba(243,236,221,0.16); transform:rotate(-6deg); white-space:nowrap;">Bienvenido</span>
+          <span class="graffiti-tag" aria-hidden="true" style="position:absolute; top:50%; left:30%; z-index:0; font-size:clamp(3rem,9vw,7.5rem); color:rgba(243,236,221,0.16); transform:rotate(8deg); white-space:nowrap;">Iconic</span>
+          <span class="graffiti-tag" aria-hidden="true" style="position:absolute; top:90%; right:2%; z-index:0; font-size:clamp(3rem,9vw,7.5rem); color:rgba(243,236,221,0.16); transform:rotate(-10deg); white-space:nowrap;">Drip</span>
+      <div class="carousel" id="latestCarousel">
+        <button type="button" class="carousel-btn carousel-btn-prev" id="latestPrev" data-i18n-aria="carousel_prev" aria-label="Précédent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 L8 12 L15 19"/></svg>
+        </button>
+        <div class="carousel-viewport">
+          <div class="carousel-track" id="latestTrack"></div>
+        </div>
+        <button type="button" class="carousel-btn carousel-btn-next" id="latestNext" data-i18n-aria="carousel_next" aria-label="Suivant">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5 L16 12 L9 19"/></svg>
+        </button>
+      </div>
+      <div class="carousel-dots" id="latestDots"></div>
+    </div>
+  </section>
+
+<section id="boutique" class="story">
+    <svg class="spray-accent" width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="5"/><circle cx="78" cy="44" r="3"/><circle cx="90" cy="60" r="2"/>
+      <circle cx="40" cy="40" r="2.5"/><circle cx="30" cy="60" r="1.8"/><circle cx="70" cy="80" r="2.2"/>
+    </svg>
+    <span class="graffiti-tag" aria-hidden="true" style="position:absolute; bottom:6%; right:2%; z-index:0; font-size:clamp(2rem,5vw,3.4rem); color:rgba(217,166,92,0.1); transform:rotate(4deg);">VQ 24</span>
+    <svg width="60" height="220" viewBox="0 0 60 220" style="position:absolute; top:0; left:20px; opacity:0.4; z-index:0; pointer-events:none;" aria-hidden="true">
+      <path d="M20 0 C15 40 25 60 18 100 C12 130 22 150 15 190 C12 200 18 210 15 220" stroke="var(--red)" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.55"/>
+      <circle cx="15" cy="220" r="4" fill="var(--red)" opacity="0.5"/>
+    </svg>
+    <div class="wrap">
+      <div class="story-grid">
+        <div class="story-media">
+          <img src="assets/images/instore.jpg" alt="Intérieur de la boutique Venti Quattro">
+          <span class="tag" data-i18n="story_tag">EN BOUTIQUE</span>
+          <svg class="marble-frame" viewBox="0 0 460 460" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M0 40 C40 60 30 100 70 110 C120 125 100 170 150 180" stroke="#f3ecdd" stroke-opacity="0.14" stroke-width="1.6" fill="none"/>
+            <path d="M460 90 C410 110 430 150 380 170 C330 190 350 240 300 250" stroke="#f3ecdd" stroke-opacity="0.1" stroke-width="1.2" fill="none"/>
+            <path d="M0 380 C50 360 60 400 110 390 C160 380 170 420 220 410" stroke="#d9a65c" stroke-opacity="0.13" stroke-width="1.4" fill="none"/>
+          </svg>
+        </div>
+        <div class="story-copy">
+          <svg class="marble-panel" viewBox="0 0 600 500" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M20 470 C110 420 90 340 190 300 C270 265 260 180 210 90 C180 40 210 -10 260 -20" stroke="#f3ecdd" stroke-opacity="0.09" stroke-width="2" fill="none"/>
+            <path d="M560 20 C480 60 500 130 430 170 C360 210 390 280 320 320 C270 350 280 400 220 430" stroke="#f3ecdd" stroke-opacity="0.07" stroke-width="1.5" fill="none"/>
+            <path d="M0 150 C70 170 60 220 130 230 C190 240 180 290 240 300" stroke="#d9a65c" stroke-opacity="0.08" stroke-width="1.2" fill="none"/>
+            <path d="M600 460 C540 430 550 380 490 360" stroke="#d9a65c" stroke-opacity="0.08" stroke-width="1.2" fill="none"/>
+          </svg>
+          <span class="eyebrow" data-i18n="story_eyebrow">La maison</span>
+          <h2 data-i18n="story_title">Un espace pensé pour prendre son temps.</h2>
+          <p data-i18n="story_p1">Marbre noir, néon doré, portants bien rangés — l'idée, c'est que choisir sa tenue devienne un plaisir plutôt qu'une corvée.</p>
+          <p data-i18n="story_p2">Venti Quattro est né à Alger avec une conviction simple : le style de rue mérite une vraie adresse, pas juste une page produit.</p>
+          <div class="story-stats">
+            <div><b>10k+</b><span data-i18n="stat1">Abonnés Instagram</span></div>
+            <div><b>58</b><span data-i18n="stat2">Wilayas livrées</span></div>
+            <div><b>24/7</b><span data-i18n="stat3">Commandes en ligne</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="fondateurs" class="founders">
+    <svg class="spray-accent" width="110" height="110" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="5"/><circle cx="78" cy="44" r="3"/><circle cx="90" cy="60" r="2"/>
+      <circle cx="40" cy="40" r="2.5"/><circle cx="30" cy="60" r="1.8"/><circle cx="70" cy="80" r="2.2"/>
+    </svg>
+    <span class="graffiti-tag" aria-hidden="true" style="position:absolute; top:8%; left:3%; z-index:0; font-size:clamp(2rem,5vw,3.4rem); color:rgba(255, 255, 255, 0.08); transform:rotate(-4deg);">FRESH DROP</span>
+    <div class="wrap" style="position:relative; z-index:1;">
+      <div class="section-head">
+        <span class="eyebrow" data-i18n="cat_eyebrow">Ce qu'on porte</span>
+        <h2 data-i18n="cat_title">Trois rayons, un seul état d'esprit.</h2>
+        <p data-i18n="cat_desc">Sélection pensée pour la rue algéroise : coupes actuelles, marques recherchées, prix qui restent honnêtes.</p>
+      </div>
+      <div class="cat-grid">
+        <div class="cat-card">
+          <span class="num">01</span>
+          <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 8 L24 13 L32 8 L40 14 L36 22 L32 20 V40 H16 V20 L12 22 L8 14 Z" stroke-linejoin="round"/></svg>
+          <h3 data-i18n="cat1_title">Vêtements homme</h3>
+          <p data-i18n="cat1_desc">Hoodies, vestes, jeans et essentiels du quotidien — des pièces qui tiennent la route et l'allure.</p>
+          <span class="arrow" data-i18n="cat_cta">Découvrir →</span>
+        </div>
+        <div class="cat-card">
+          <span class="num">02</span>
+          <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 30 C10 22 16 20 20 24 L28 16 C31 13 35 14 36 18 C38 24 34 30 28 32 L10 38 C7 39 5 36 6 33 Z" stroke-linejoin="round"/></svg>
+          <h3 data-i18n="cat2_title">Sneakers</h3>
+          <p data-i18n="cat2_desc">Modèles originaux, éditions recherchées et classiques indémodables, en stock et vérifiés.</p>
+          <span class="arrow" data-i18n="cat_cta">Découvrir →</span>
+        </div>
+        <div class="cat-card">
+          <span class="num">03</span>
+          <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="24" cy="12" r="4"/><path d="M12 40 L18 20 H30 L36 40" stroke-linejoin="round"/><path d="M18 20 L24 30 L30 20"/></svg>
+          <h3 data-i18n="cat3_title">Accessoires</h3>
+          <p data-i18n="cat3_desc">Casquettes, sacs et petites pièces qui complètent une tenue — le détail qui change tout.</p>
+          <span class="arrow" data-i18n="cat_cta">Découvrir →</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="localisation">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow" data-i18n="map_eyebrow">Nous trouver</span>
+        <h2 data-i18n="map_title">Vue satellite de la boutique.</h2>
+        <p data-i18n="map_desc">Bordj El Bahri, Alger — repérez l'enseigne depuis la route et suivez l'itinéraire.</p>
+      </div>
+      <div class="map-shell">
+        <div class="map-note">
+          <b data-i18n="map_note_title">Venti Quattro</b>
+          <span data-i18n="map_note_sub">Bordj El Bahri, Alger</span>
+        </div>
+        <iframe
+          src="https://www.google.com/maps?q=36.7797589,3.2495996&z=18&t=k&output=embed"
+          loading="lazy"
+          referrerpolicy="no-referrer-when-downgrade"
+          allowfullscreen>
+        </iframe>
+      </div>
+    </div>
+  </section>
+
+<!-- ==================== START INSTAGRAM SECTION ==================== -->
+  <section id="instagram" style="background: var(--charcoal); padding: 120px 0;">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow" data-i18n="ig_eyebrow">Sur Instagram</span>
+        <h2 data-i18n="ig_title">Ce qui bouge en ce moment.</h2>
+        <p data-i18n="ig_desc">Les derniers posts et reels @venti_quattro, en direct d'Instagram.</p>
+      </div>
+      
+      <div class="ig-grid">
+        <!-- Post 1 -->
+        <a href="https://www.instagram.com/reel/DZvD_Qgt9KT/" target="_blank" rel="noopener" class="ig-card">
+          <img src="assets/images/ig-1.jpg" alt="Venti Quattro Visual 1">
+          <div class="ig-overlay">
+            <span>✦ Voir le Reel</span>
+          </div>
+        </a>
+        
+        <!-- Post 2 -->
+        <a href="https://www.instagram.com/venti_quattro/reel/DZ-3CTzRxDt/" target="_blank" rel="noopener" class="ig-card">
+          <img src="assets/images/ig-2.jpg" alt="Venti Quattro Visual 2">
+          <div class="ig-overlay">
+            <span>✦ Voir le Reel</span>
+          </div>
+        </a>
+        
+        <!-- Post 3 -->
+        <a href="https://www.instagram.com/venti_quattro/p/DZqFO4codBM/" target="_blank" rel="noopener" class="ig-card">
+          <img src="assets/images/ig-3.jpg" alt="Venti Quattro Visual 3">
+          <div class="ig-overlay">
+            <span>✦ Voir le Post</span>
+          </div>
+        </a>
+        
+        <!-- Post 4 -->
+        <a href="https://www.instagram.com/venti_quattro/reel/DaBOFulNJAS/" target="_blank" rel="noopener" class="ig-card">
+          <img src="assets/images/ig-4.jpg" alt="Venti Quattro Visual 4">
+          <div class="ig-overlay">
+            <span>✦ Voir le Reel</span>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Component Styles Injection -->
+  <!-- ==================== END INSTAGRAM SECTION ==================== -->
+
+ <section id="avis" style="position:relative; overflow:hidden;">
+    <svg width="140" height="140" viewBox="0 0 140 140" style="position:absolute; bottom:-20px; left:-30px; opacity:0.45; z-index:0; pointer-events:none;" aria-hidden="true">
+      <path d="M10 100 Q30 60 70 70 Q60 30 100 20" stroke="#3fa89c" stroke-width="2" fill="none" opacity="0.6"/>
+      <circle cx="105" cy="18" r="4" fill="#e2323a" opacity="0.7"/>
+      <circle cx="115" cy="30" r="2.5" fill="#e2323a" opacity="0.5"/>
+      <circle cx="20" cy="110" r="3" fill="#f2c94c" opacity="0.6"/>
+    </svg>
+    <span class="graffiti-tag" aria-hidden="true" style="position:absolute; top:4%; right:-1%; z-index:0; font-size:clamp(2.2rem,6vw,4.2rem); color:rgba(255,47,109,0.08); transform:rotate(-3deg);">Bienvenido</span>
+    <svg width="130" height="110" viewBox="0 0 150 130" style="position:absolute; top:0; right:8%; opacity:0.4; z-index:0; pointer-events:none;" aria-hidden="true">
+      <path d="M20 90 L15 45 L40 65 L55 25 L70 65 L95 45 L90 90 Z" fill="none" stroke="var(--tape-yellow)" stroke-width="2.5" stroke-linejoin="round"/>
+      <circle cx="15" cy="45" r="3" fill="var(--tape-yellow)"/>
+      <circle cx="55" cy="25" r="3" fill="var(--tape-yellow)"/>
+      <circle cx="95" cy="45" r="3" fill="var(--tape-yellow)"/>
+    </svg>
+    <div class="wrap social" style="position:relative; z-index:1;">
+      <div class="social-card" style="position:relative;">
+        <span aria-hidden="true" style="position:absolute; top:-14px; left:24px; width:70px; height:26px; background:linear-gradient(180deg, rgba(242,201,76,0.85), rgba(242,201,76,0.65)); box-shadow:0 2px 4px rgba(0,0,0,0.15); transform:rotate(-6deg); z-index:2; opacity:0.9;"></span>
+        <div class="handle">
+          <img src="assets/images/logo.jpg" alt="Venti Quattro">
+          <div>
+            <b>venti_quattro</b>
+            <span data-i18n="social_sub">Clothing Retail · Alger</span>
+          </div>
+        </div>
+        <div class="social-stats">
+          <div><b>+10k</b><span data-i18n="social_followers">Abonnés</span></div>
+          <div><b>24/7</b><span data-i18n="social_following">Suivis</span></div>
+          <div><b>69</b><span data-i18n="social_wilayas">Wilayas</span></div>
+        </div>
+        <div class="social-links">
+          <a href="https://www.instagram.com/venti_quattro/" target="_blank" rel="noopener">Instagram — @venti_quattro <span>↗</span></a>
+          <a href="https://www.tiktok.com/@venti.quattro7" target="_blank" rel="noopener">TikTok — venti.quattro7 <span>↗</span></a>
+          <a href="tel:0549717507">Téléphone — 05 49 71 75 07 <span>↗</span></a>
+        </div>
+      </div>
+      <div>
+        <div class="section-head" style="margin-bottom:32px;">
+          <span class="eyebrow" data-i18n="reviews_eyebrow">Ils en parlent</span>
+          <h2 data-i18n="reviews_title">La rue en dit du bien.</h2>
+        </div>
+        <div class="review-strip">
+          <div class="review" style="position:relative;">
+            <span aria-hidden="true" style="position:absolute; top:-12px; left:50%; margin-left:-32px; width:64px; height:22px; background:linear-gradient(180deg, rgba(63,168,156,0.8), rgba(63,168,156,0.6)); box-shadow:0 2px 4px rgba(0,0,0,0.15); transform:rotate(3deg); z-index:2; opacity:0.9;"></span>
+            <div class="stars">★★★★★</div>
+            <p data-i18n="review1">Le stock change vraiment chaque semaine, j'y passe presque tous les vendredis.</p>
+            <div class="who" data-i18n="review1_who">— Client, Alger</div>
+          </div>
+          <div class="review" style="position:relative;">
+            <span aria-hidden="true" style="position:absolute; top:-12px; left:50%; margin-left:-32px; width:64px; height:22px; background:linear-gradient(180deg, rgba(226,50,58,0.75), rgba(226,50,58,0.55)); box-shadow:0 2px 4px rgba(0,0,0,0.15); transform:rotate(-4deg); z-index:2; opacity:0.9;"></span>
+            <div class="stars">★★★★★</div>
+            <p data-i18n="review2">Commande sur WhatsApp reçue en 3 jours, produit conforme aux photos.</p>
+            <div class="who" data-i18n="review2_who">— Client, livraison wilaya</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer id="contact" style="position:relative; overflow:hidden;">
+  <svg width="200" height="200" viewBox="0 0 200 200" style="position:absolute; top:10px; right:-40px; opacity:0.5; z-index:0; pointer-events:none;" aria-hidden="true">
+    <path d="M20 40 Q60 20 80 60 Q120 50 140 90" stroke="#d9a65c" stroke-width="2" fill="none" opacity="0.5"/>
+    <circle cx="150" cy="95" r="4" fill="#e2323a" opacity="0.6"/>
+    <circle cx="162" cy="108" r="2.5" fill="#e2323a" opacity="0.45"/>
+    <circle cx="30" cy="30" r="3" fill="#3fa89c" opacity="0.5"/>
+  </svg>
+  <div class="wrap" style="position:relative; z-index:1;">
+    <div class="cta-block" style="position:relative;">
+      <svg width="140" height="120" viewBox="0 0 160 140" style="position:absolute; top:-10px; right:-30px; opacity:0.45; z-index:0; pointer-events:none;" aria-hidden="true">
+        <path d="M40 90 Q20 60 45 35 Q75 5 105 30 Q125 48 110 65" stroke="var(--tape-blue)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <path d="M98 55 L110 65 L122 52" stroke="var(--tape-blue)" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="eyebrow" data-i18n="cta_eyebrow">On vous attend</span>
+      <h2 data-i18n="cta_title">Prêt à compléter votre tenue ?</h2>
+      <p data-i18n="cta_desc">Écrivez-nous sur WhatsApp pour voir le stock du moment, ou passez directement à la boutique.</p>
+      <div class="hero-actions">
+        <a href="https://wa.me/213549717507" target="_blank" rel="noopener" class="btn btn-solid" data-i18n="cta_btn1">Écrire sur WhatsApp</a>
+        <a href="https://maps.app.goo.gl/CuoPDGwUmPXMSXs99" target="_blank" rel="noopener" class="btn btn-ghost" data-i18n="cta_btn2">Voir sur la carte</a>
+      </div>
+    </div>
+
+    <div class="foot-grid">
+      <div class="foot-brand" style="position:relative;">
+        <svg width="90" height="70" viewBox="0 0 200 200" style="position:absolute; top:-30px; left:-20px; opacity:0.35; z-index:0; pointer-events:none;" aria-hidden="true">
+          <path d="M60 40 Q40 20 65 10 Q90 0 100 25 Q125 15 130 40 Q150 45 140 65 Q160 75 145 95 Q150 115 125 110 Q120 130 95 120 Q80 140 60 120 Q35 125 40 100 Q15 95 30 75 Q20 55 45 55 Q45 40 60 40 Z" fill="var(--red)" opacity="0.5"/>
+        </svg>
+        <span class="tape tape-red" style="top:-10px; left:2px; transform:rotate(-4deg);"></span>
+        <span class="brand-name">Venti Quattro<b>24</b></span>
+        <p data-i18n="foot_desc">Clothing retail à Alger — vêtements, sneakers et accessoires pour un style qui tient la rue.</p>
+      </div>
+      <div class="foot-col">
+        <h4 data-i18n="foot_h1">Boutique</h4>
+        <a href="boutique.php" data-i18n="foot_maison">La maison</a>
+        <a href="#collections" data-i18n="nav_collections">Collections</a>
+        <a href="#avis" data-i18n="foot_avis">Avis clients</a>
+      </div>
+      <div class="foot-col">
+        <h4 data-i18n="nav_contact">Contact</h4>
+        <a href="tel:0549717507">05 49 71 75 07</a>
+        <a href="https://wa.me/213549717507" target="_blank" rel="noopener">WhatsApp</a>
+        <a href="https://maps.app.goo.gl/CuoPDGwUmPXMSXs99" target="_blank" rel="noopener" data-i18n="foot_directions">Itinéraire</a>
+      </div>
+      <div class="foot-col">
+        <h4 data-i18n="foot_h3">Suivez-nous</h4>
+        <a href="https://www.instagram.com/venti_quattro/" target="_blank" rel="noopener">Instagram</a>
+        <a href="https://www.tiktok.com/@venti.quattro7" target="_blank" rel="noopener">TikTok</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span data-i18n="foot_rights">© 2026 Venti Quattro. Tous droits réservés.</span>
+      <span data-i18n="foot_loc">Created by <a target="_blank" href="https://hali7m.github.io/">TOUIL Abdelhalim</a></span>
+    </div>
+  </div>
+</footer>
+
+<a class="wa-float" href="https://wa.me/213549717507" target="_blank" rel="noopener" aria-label="WhatsApp">
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.29-1.39a9.9 9.9 0 0 0 4.75 1.21h.01c5.46 0 9.9-4.45 9.9-9.91C21.96 6.45 17.5 2 12.04 2zm0 18.13h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.22 8.22 0 0 1-1.26-4.37c0-4.54 3.7-8.24 8.26-8.24 2.2 0 4.27.86 5.83 2.42a8.18 8.18 0 0 1 2.41 5.83c0 4.55-3.7 8.24-8.25 8.24zm4.52-6.17c-.25-.12-1.47-.72-1.7-.81-.23-.08-.39-.12-.56.13-.17.25-.64.81-.78.97-.14.17-.29.19-.53.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.24-1.47-1.39-1.72-.14-.25-.02-.38.11-.51.11-.11.25-.29.37-.43.12-.14.16-.25.25-.41.08-.17.04-.31-.02-.44-.06-.12-.56-1.35-.77-1.85-.2-.48-.41-.42-.56-.43-.14-.01-.31-.01-.48-.01-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08 0 1.22.89 2.4 1.02 2.57.12.17 1.75 2.67 4.24 3.74.59.26 1.06.41 1.42.52.6.19 1.14.16 1.57.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.14-1.18-.06-.11-.23-.17-.48-.29z"/></svg>
+</a>
+
+<script src="assets/js/cart.js"></script>
+<script>
+const translations = {
+  fr: {
+    nav_collections:"Collections", nav_boutique:"La boutique", nav_avis:"Avis", nav_contact:"Contact",
+    nav_cta:"WhatsApp →",
+    hero_eyebrow:"Clothing Retail — Alger",
+    hero_title1:"Porté à Alger,", hero_title1b:"reconnu dans la rue.",
+    hero_title2:"Streetwear · Sneakers · 24",
+    hero_lead:"Chaque pièce est choisie pour avoir de l'allure dehors. Nouveautés chaque semaine, livraison vers les 58 wilayas.",
+    hero_btn1:"Voir la boutique", hero_btn2:"Contacnter nous",
+    mq1:"NOUVELLE COLLECTION", mq2:"LIVRAISON 58 WILAYA", mq3:"SNEAKERS", mq4:"VENTI QUATTRO 24",
+    cat_eyebrow:"Ce qu'on porte", cat_title:"Trois rayons, un seul état d'esprit.",
+    cat_desc:"Sélection pensée pour la rue algéroise : coupes actuelles, marques recherchées, prix qui restent honnêtes.",
+    cat1_title:"Vêtements homme", cat1_desc:"Hoodies, vestes, jeans et essentiels du quotidien — des pièces qui tiennent la route et l'allure.",
+    cat2_title:"Sneakers", cat2_desc:"Modèles originaux, éditions recherchées et classiques indémodables, en stock et vérifiés.",
+    cat3_title:"Accessoires", cat3_desc:"Casquettes, sacs et petites pièces qui complètent une tenue — le détail qui change tout.",
+    cat_cta:"Découvrir →",
+    story_tag:"EN BOUTIQUE", story_eyebrow:"La maison", story_title:"Un espace pensé pour prendre son temps.",
+    story_p1:"Marbre noir, néon doré, portants bien rangés — l'idée, c'est que choisir sa tenue devienne un plaisir plutôt qu'une corvée.",
+    story_p2:"Venti Quattro est né à Alger avec une conviction simple : le style de rue mérite une vraie adresse, pas juste une page produit.",
+    stat1:"Abonnés Instagram", stat2:"Wilayas livrées", stat3:"Commandes en ligne",
+    latest_eyebrow:"Fraîchement arrivé", latest_title:"Les 20 dernières pièces.",
+    latest_desc:"Ce qui vient d'arriver en boutique, avant que ça ne reparte.",
+    carousel_prev:"Précédent", carousel_next:"Suivant",
+    latest_new:"Nouveau", latest_sale:"Promo", latest_empty:"Aucun produit pour le moment.", latest_cta:"Voir →",
+    shopfront_eyebrow:"Notre adresse", shopfront_title:"Passez nous voir à Alger.",
+    map_eyebrow:"Nous trouver", map_title:"Vue satellite de la boutique.",
+    map_desc:"Bordj El Bahri, Alger — repérez l'enseigne depuis la route et suivez l'itinéraire.",
+    map_note_title:"Venti Quattro", map_note_sub:"Bordj El Bahri, Alger",
+    ig_eyebrow:"Sur Instagram", ig_title:"Ce qui bouge en ce moment.", ig_desc:"Les derniers posts et reels @venti_quattro, en direct d'Instagram.",
+    social_sub:"Clothing Retail · Alger", social_followers:"Abonnés", social_following:"Suivis", social_wilayas:"Wilayas",
+    reviews_eyebrow:"Ils en parlent", reviews_title:"La rue en dit du bien.",
+    review1:"Le stock change vraiment chaque semaine, j'y passe presque tous les vendredis.", review1_who:"— Client, Alger",
+    review2:"Commande sur WhatsApp reçue en 3 jours, produit conforme aux photos.", review2_who:"— Client, livraison wilaya",
+    cta_eyebrow:"On vous attend", cta_title:"Prêt à compléter votre tenue ?",
+    cta_desc:"Écrivez-nous sur WhatsApp pour voir le stock du moment, ou passez directement à la boutique.",
+    cta_btn1:"Écrire sur WhatsApp", cta_btn2:"Voir sur la carte",
+    foot_desc:"Clothing retail à Alger — vêtements, sneakers et accessoires pour un style qui tient la rue.",
+    foot_h1:"Boutique", foot_maison:"La maison", foot_avis:"Avis clients", foot_h3:"Suivez-nous", foot_directions:"Itinéraire",
+    cart_title:"Votre panier", cart_subtotal:"Sous-total",
+    cart_note:"Notre équipe vous contactera pour finaliser votre commande.",
+    cart_checkout:"Confirmer Votre Commande", cart_empty:"Votre panier est vide.",
+    cat_tshirts:"T-shirts", cat_joggings:"Joggings & Sweats", cat_pantalons:"Pantalons", cat_shorts:"Shorts",
+    cat_sneakers:"Sneakers", cat_vestes:"Vestes", cat_accessoires:"Accessoires",
+    p1_name:"T-shirt brodé bleu roi", p2_name:"Polo colorblock", p3_name:"T-shirt oversize uni",
+    p4_name:"Sweat imprimé bleu", p5_name:"Jogging molleton gris", p6_name:"Sweat à capuche noir",
+    p7_name:"Jean droit délavé", p8_name:"Cargo pants kaki", p9_name:"Pantalon jogger noir",
+    p10_name:"Short cargo beige", p11_name:"Short jean brut",
+    p12_name:"Sneakers running blanches", p13_name:"Sneakers montantes noires", p14_name:"Sneakers rétro colorées",
+    p15_name:"Veste coach noire", p16_name:"Doudoune sans manches",
+    p17_name:"Casquette brodée", p18_name:"Sac banane",
+  },
+  en: {
+    nav_collections:"Collections", nav_boutique:"The store", nav_avis:"Reviews", nav_contact:"Contact",
+    nav_cta:"WhatsApp →",
+    hero_eyebrow:"Clothing Retail — Algiers",
+    hero_title1:"Worn in Algiers,", hero_title1b:"recognized on the street.",
+    hero_title2:"Streetwear · Sneakers · 24",
+    hero_lead:"Every piece is picked to carry itself outside. New drops weekly, delivery across all 58 wilayas.",
+    hero_btn1:"View the collection", hero_btn2:"Order on WhatsApp",
+    mq1:"NEW COLLECTION", mq2:"NATIONWIDE DELIVERY", mq3:"ORIGINAL SNEAKERS", mq4:"VENTI QUATTRO 24",
+    cat_eyebrow:"What we carry", cat_title:"Three racks, one mindset.",
+    cat_desc:"A selection built for Algiers streets: current fits, sought-after brands, honest prices.",
+    cat1_title:"Men's clothing", cat1_desc:"Hoodies, jackets, jeans and everyday essentials — pieces that hold up and hold their look.",
+    cat2_title:"Sneakers", cat2_desc:"Original models, sought-after editions and timeless classics, in stock and verified.",
+    cat3_title:"Accessories", cat3_desc:"Caps, bags and small pieces that finish an outfit — the detail that changes everything.",
+    cat_cta:"Discover →",
+    story_tag:"IN STORE", story_eyebrow:"The house", story_title:"A space made to slow down in.",
+    story_p1:"Black marble, gold neon, racks kept tidy — the idea is that picking an outfit should feel like a pleasure, not a chore.",
+    story_p2:"Venti Quattro was born in Algiers on a simple belief: street style deserves a real address, not just a product page.",
+    stat1:"Instagram followers", stat2:"Wilayas delivered", stat3:"Orders online",
+    latest_eyebrow:"Fresh in", latest_title:"The last 20 pieces to drop.",
+    latest_desc:"What just landed in store, before it's gone again.",
+    carousel_prev:"Previous", carousel_next:"Next",
+    latest_new:"New", latest_sale:"Sale", latest_empty:"No products yet.", latest_cta:"View →",
+    shopfront_eyebrow:"Find us", shopfront_title:"Come see us in Algiers.",
+    map_eyebrow:"Find us", map_title:"Satellite view of the store.",
+    map_desc:"Bordj El Bahri, Algiers — spot the sign from the road and get directions.",
+    map_note_title:"Venti Quattro", map_note_sub:"Bordj El Bahri, Algiers",
+    ig_eyebrow:"On Instagram", ig_title:"What's moving right now.", ig_desc:"The latest posts and reels from @venti_quattro, live from Instagram.",
+    social_sub:"Clothing Retail · Algiers", social_followers:"Followers", social_following:"Following", social_wilayas:"Wilayas",
+    reviews_eyebrow:"What people say", reviews_title:"The street is talking.",
+    review1:"Stock genuinely changes every week, I drop by almost every Friday.", review1_who:"— Customer, Algiers",
+    review2:"Ordered on WhatsApp, arrived in 3 days, matched the photos exactly.", review2_who:"— Customer, wilaya delivery",
+    cta_eyebrow:"We're waiting for you", cta_title:"Ready to finish your fit?",
+    cta_desc:"Message us on WhatsApp to see what's in stock, or come straight to the store.",
+    cta_btn1:"Message on WhatsApp", cta_btn2:"View on the map",
+    foot_desc:"Clothing retail in Algiers — clothes, sneakers and accessories for a style that holds up on the street.",
+    foot_h1:"Store", foot_maison:"The house", foot_avis:"Customer reviews", foot_h3:"Follow us", foot_directions:"Directions",
+    cart_title:"Your cart", cart_subtotal:"Subtotal",
+    cart_note:"Our team will contact you to finalize your order.",
+    cart_checkout:"Checkout", cart_empty:"Your cart is empty.",
+    cat_tshirts:"T-shirts", cat_joggings:"Joggers & Sweats", cat_pantalons:"Pants", cat_shorts:"Shorts",
+    cat_sneakers:"Sneakers", cat_vestes:"Jackets", cat_accessoires:"Accessories",
+    p1_name:"Royal blue embroidered tee", p2_name:"Colorblock polo", p3_name:"Plain oversized tee",
+    p4_name:"Blue print sweatshirt", p5_name:"Grey fleece joggers", p6_name:"Black hoodie",
+    p7_name:"Washed straight jeans", p8_name:"Khaki cargo pants", p9_name:"Black jogger pants",
+    p10_name:"Beige cargo shorts", p11_name:"Raw denim shorts",
+    p12_name:"White running sneakers", p13_name:"Black high-top sneakers", p14_name:"Retro colorway sneakers",
+    p15_name:"Black coach jacket", p16_name:"Sleeveless puffer vest",
+    p17_name:"Embroidered cap", p18_name:"Belt bag",
+    foot_rights:"© 2026 Venti Quattro. All rights reserved.", foot_loc:"Algiers, Algeria"
+  },
+  ar: {
+    nav_collections:"المجموعات", nav_boutique:"المحل", nav_avis:"الآراء", nav_contact:"اتصل بنا",
+    nav_cta:"واتساب ←",
+    hero_eyebrow:"بيع ملابس بالتجزئة — الجزائر",
+    hero_title1:"يُلبس في الجزائر،", hero_title1b:"معروف في الشارع.",
+    hero_title2:"ستريتوير · سنيكرز · 24",
+    hero_lead:"كل قطعة نختارها تعطي إطلالة قوية في الخارج. تشكيلة جديدة كل أسبوع، وتوصيل إلى 58 ولاية.",
+    hero_btn1:"شاهد المجموعة", hero_btn2:"اطلب عبر واتساب",
+    mq1:"مجموعة جديدة", mq2:"توصيل 58 ولاية", mq3:"سنيكرز أصلي", mq4:"فينتي كواترو 24",
+    cat_eyebrow:"ما نبيعه", cat_title:"ثلاثة أقسام، روح واحدة.",
+    cat_desc:"تشكيلة مختارة لشارع الجزائر: قصّات عصرية، ماركات مطلوبة، وأسعار صادقة.",
+    cat1_title:"ملابس رجالية", cat1_desc:"سويشيرت، جاكيتات، جينز وأساسيات يومية — قطع تدوم وتحافظ على الإطلالة.",
+    cat2_title:"سنيكرز", cat2_desc:"موديلات أصلية وإصدارات مطلوبة وكلاسيكيات لا تنتهي، متوفرة وموثقة.",
+    cat3_title:"إكسسوارات", cat3_desc:"قبعات، حقائب وقطع صغيرة تكمل الإطلالة — التفصيل الذي يغيّر كل شيء.",
+    cat_cta:"اكتشف ←",
+    story_tag:"داخل المحل", story_eyebrow:"المكان", story_title:"مساحة صُممت لتأخذ وقتك فيها.",
+    story_p1:"رخام أسود، نيون ذهبي، ورفوف مرتبة — الفكرة أن يصبح اختيار الملابس متعة لا عبئًا.",
+    story_p2:"وُلد فينتي كواترو في الجزائر على قناعة بسيطة: ستايل الشارع يستحق عنوانًا حقيقيًا، لا مجرد صفحة منتج.",
+    stat1:"متابع على إنستغرام", stat2:"ولاية نوصل إليها", stat3:"طلب عبر الإنترنت",
+    latest_eyebrow:"وصل حديثاً", latest_title:"آخر 20 قطعة وصلتنا.",
+    latest_desc:"كل ما وصل حديثاً للمحل، قبل ما يخلص من جديد.",
+    carousel_prev:"السابق", carousel_next:"التالي",
+    latest_new:"جديد", latest_sale:"تخفيض", latest_empty:"لا توجد منتجات حالياً.", latest_cta:"شاهد ←",
+    shopfront_eyebrow:"عنواننا", shopfront_title:"تعالوا لزيارتنا في الجزائر.",
+    map_eyebrow:"موقعنا", map_title:"صورة القمر الصناعي للمحل.",
+    map_desc:"برج البحري، الجزائر — تعرّف على اللافتة من الطريق واحصل على الاتجاهات.",
+    map_note_title:"فينتي كواترو", map_note_sub:"برج البحري، الجزائر",
+    ig_eyebrow:"على إنستغرام", ig_title:"آخر التحديثات الآن.", ig_desc:"أحدث المنشورات والريلز من @venti_quattro، مباشرة من إنستغرام.",
+    social_sub:"بيع ملابس بالتجزئة · الجزائر", social_followers:"متابع", social_following:"يتابع", social_wilayas:"ولاية",
+    reviews_eyebrow:"رأيهم فينا", reviews_title:"الشارع يتكلم بالخير.",
+    review1:"المخزون يتغيّر فعلاً كل أسبوع، أمر بالمحل كل جمعة تقريبًا.", review1_who:"— زبون، الجزائر",
+    review2:"طلبت عبر واتساب ووصلني خلال 3 أيام، مطابق تمامًا للصور.", review2_who:"— زبون، توصيل لولاية",
+    cta_eyebrow:"في انتظاركم", cta_title:"جاهز تكمل إطلالتك؟",
+    cta_desc:"راسلونا عبر واتساب لمعرفة المتوفر حاليًا، أو تعالوا مباشرة إلى المحل.",
+    cta_btn1:"راسلنا على واتساب", cta_btn2:"شاهد على الخريطة",
+    foot_desc:"بيع ملابس بالتجزئة في الجزائر — ملابس وسنيكرز وإكسسوارات لستايل يصمد في الشارع.",
+    foot_h1:"المحل", foot_maison:"المكان", foot_avis:"آراء الزبائن", foot_h3:"تابعونا", foot_directions:"الاتجاهات",
+    cart_title:"سلتك", cart_subtotal:"المجموع",
+    cart_note:"الدفع الإلكتروني سيتوفر قريباً. حالياً سيتواصل معك فريقنا لإتمام طلبك.",
+    cart_checkout:"الدفع قريباً", cart_empty:"سلتك فارغة.",
+    cat_tshirts:"تيشيرتات", cat_joggings:"جوغينغ وسويشيرت", cat_pantalons:"بناطيل", cat_shorts:"شورتات",
+    cat_sneakers:"سنيكرز", cat_vestes:"جاكيتات", cat_accessoires:"إكسسوارات",
+    p1_name:"تيشيرت مطرز أزرق", p2_name:"بولو متعدد الألوان", p3_name:"تيشيرت واسع سادة",
+    p4_name:"سويشيرت أزرق مطبوع", p5_name:"جوغينغ رمادي", p6_name:"سويشيرت بقبعة أسود",
+    p7_name:"جينز مستقيم مغسول", p8_name:"بنطلون كارغو كاكي", p9_name:"بنطلون جوغر أسود",
+    p10_name:"شورت كارغو بيج", p11_name:"شورت جينز خام",
+    p12_name:"سنيكرز ركض أبيض", p13_name:"سنيكرز عالي أسود", p14_name:"سنيكرز ريترو ملون",
+    p15_name:"جاكيت كوتش أسود", p16_name:"صدرية منفوخة بلا أكمام",
+    p17_name:"قبعة مطرزة", p18_name:"حقيبة خصر",
+    foot_rights:"© 2026 فينتي كواترو. جميع الحقوق محفوظة.", foot_loc:"الجزائر، الجزائر"
+  }
+};
+
+/* ============ CART ============
+   cartKey/getCart/saveCart/fmtPrice/addToCart/showCartNotification/setQty/
+   removeFromCart/renderCartBadge/renderCartDrawer/openCart/closeCart now
+   live in assets/js/cart.js (shared with boutique.php, produit.php, commande.php). */
+const ICONS = {
+  tshirt:  '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 8 L24 13 L32 8 L40 14 L36 22 L32 20 V40 H16 V20 L12 22 L8 14 Z" stroke-linejoin="round"/></svg>',
+  hoodie:  '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 8 L24 13 L32 8 L40 14 L36 22 L32 20 V40 H16 V20 L12 22 L8 14 Z" stroke-linejoin="round"/><path d="M20 8 Q24 4 28 8" /></svg>',
+  pants:   '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 6 H34 L35 14 L33 42 H27 L24 20 L21 42 H15 L13 14 Z" stroke-linejoin="round"/></svg>',
+  shorts:  '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 8 H35 L36 24 L27 32 L24 24 L21 32 L12 24 Z" stroke-linejoin="round"/></svg>',
+  sneaker: '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 30 C10 22 16 20 20 24 L28 16 C31 13 35 14 36 18 C38 24 34 30 28 32 L10 38 C7 39 5 36 6 33 Z" stroke-linejoin="round"/></svg>',
+  jacket:  '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 8 L24 13 L32 8 L40 16 L35 22 L32 20 V40 H16 V20 L13 22 L8 16 Z" stroke-linejoin="round"/><path d="M24 13 V40" /></svg>',
+  accessory:'<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="24" cy="12" r="4"/><path d="M12 40 L18 20 H30 L36 40" stroke-linejoin="round"/><path d="M18 20 L24 30 L30 20"/></svg>'
+};
+const CATEGORIES = [
+  { id:'tshirts',     icon:'tshirt',    key:'cat_tshirts' },
+  { id:'joggings',    icon:'hoodie',    key:'cat_joggings' },
+  { id:'pantalons',   icon:'pants',     key:'cat_pantalons' },
+  { id:'shorts',      icon:'shorts',    key:'cat_shorts' },
+  { id:'sneakers',    icon:'sneaker',   key:'cat_sneakers' },
+  { id:'vestes',      icon:'jacket',    key:'cat_vestes' },
+  { id:'accessoires', icon:'accessory', key:'cat_accessoires' }
+];
+const PRODUCTS = <?php echo json_encode($productsForJs, JSON_UNESCAPED_UNICODE); ?>;
+
+let currentLang = 'fr';
+
+/* ============ LATEST PRODUCTS CAROUSEL ============
+   Renders the 20 most recently added products (highest id first) into a
+   swipeable/button-driven strip. Uses the shared PRODUCTS array so it stays
+   in sync with the cart, and fmtPrice() from assets/js/cart.js for pricing. */
+function renderLatestCarousel(){
+  const track = document.getElementById('latestTrack');
+  const dotsWrap = document.getElementById('latestDots');
+  if(!track) return;
+
+  const dict = translations[currentLang] || translations.fr;
+  const latest = [...PRODUCTS].sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 20);
+
+  if(!latest.length){
+    track.innerHTML = `<p style="color:rgba(243,236,221,0.5); padding:8px 4px;">${dict.latest_empty || 'No products yet.'}</p>`;
+    if(dotsWrap) dotsWrap.innerHTML = '';
+    updateCarouselNav();
+    return;
+  }
+
+  track.innerHTML = latest.map(p => {
+    const media = (p.hasPhoto && p.img)
+      ? `<img src="${p.img}" alt="${p.name}" loading="lazy">`
+      : (ICONS[p.icon] || ICONS.accessory);
+    const badges = [
+      p.isNew ? `<span class="product-card-badge new">${dict.latest_new || 'New'}</span>` : '',
+      p.onSale ? `<span class="product-card-badge sale">${dict.latest_sale || 'Sale'}</span>` : ''
+    ].join('');
+    const priceStr = (typeof fmtPrice === 'function') ? fmtPrice(p.price) : (p.price + ' DA');
+    const oldPriceStr = (typeof fmtPrice === 'function') ? fmtPrice(p.regularPrice) : (p.regularPrice + ' DA');
+    const oldPrice = p.onSale ? `<span class="product-card-price-old">${oldPriceStr}</span>` : '';
+    return `
+      <a href="produit.php?id=${encodeURIComponent(p.id)}" class="product-card">
+        <div class="product-card-media">
+          ${badges ? `<div class="product-card-badges">${badges}</div>` : ''}
+          ${media}
+        </div>
+        <div class="product-card-body">
+          <div class="product-card-name">${p.name}</div>
+          <div class="product-card-prices">
+            <span class="product-card-price">${priceStr}</span>
+            ${oldPrice}
+          </div>
+        </div>
+      </a>`;
+  }).join('');
+
+  if(dotsWrap){
+    dotsWrap.innerHTML = latest.map((_, i) => `<span data-dot="${i}"${i === 0 ? ' class="active"' : ''}></span>`).join('');
+  }
+  updateCarouselNav();
+}
+
+function updateCarouselNav(){
+  const viewport = document.querySelector('#latestCarousel .carousel-viewport');
+  const prevBtn = document.getElementById('latestPrev');
+  const nextBtn = document.getElementById('latestNext');
+  if(!viewport || !prevBtn || !nextBtn) return;
+
+  const max = viewport.scrollWidth - viewport.clientWidth;
+  prevBtn.disabled = viewport.scrollLeft <= 2;
+  nextBtn.disabled = viewport.scrollLeft >= max - 2;
+
+  const dots = document.querySelectorAll('#latestDots span');
+  const cards = document.querySelectorAll('#latestTrack .product-card');
+  if(dots.length && cards.length){
+    let closest = 0, closestDist = Infinity;
+    cards.forEach((c, i) => {
+      const dist = Math.abs(c.offsetLeft - viewport.scrollLeft);
+      if(dist < closestDist){ closestDist = dist; closest = i; }
+    });
+    dots.forEach((d, i) => d.classList.toggle('active', i === closest));
+  }
+}
+
+(function(){
+  const viewport = document.querySelector('#latestCarousel .carousel-viewport');
+  const prevBtn = document.getElementById('latestPrev');
+  const nextBtn = document.getElementById('latestNext');
+  if(!viewport || !prevBtn || !nextBtn) return;
+
+  function cardStep(){
+    const card = document.querySelector('#latestTrack .product-card');
+    if(!card) return 260;
+    const trackStyle = getComputedStyle(document.getElementById('latestTrack'));
+    const gap = parseFloat(trackStyle.columnGap || trackStyle.gap || 20) || 20;
+    return card.getBoundingClientRect().width + gap;
+  }
+
+  prevBtn.addEventListener('click', () => {
+    viewport.scrollBy({ left: -cardStep(), behavior: 'smooth' });
+  });
+  nextBtn.addEventListener('click', () => {
+    viewport.scrollBy({ left: cardStep(), behavior: 'smooth' });
+  });
+
+  let scrollTimer;
+  viewport.addEventListener('scroll', () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(updateCarouselNav, 60);
+  }, { passive: true });
+
+  window.addEventListener('resize', () => updateCarouselNav());
+})();
+
+renderLatestCarousel();
+
+function setLang(lang){
+  currentLang = lang;
+  const dict = translations[lang];
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const key = el.getAttribute('data-i18n');
+    if(dict[key]) el.textContent = dict[key];
+  });
+  document.querySelectorAll('[data-i18n-aria]').forEach(el=>{
+    const key = el.getAttribute('data-i18n-aria');
+    if(dict[key]) el.setAttribute('aria-label', dict[key]);
+  });
+  document.documentElement.setAttribute('lang', lang);
+  document.documentElement.setAttribute('dir', lang === 'ar' ? 'rtl' : 'ltr');
+  document.querySelectorAll('.lang-switch-menu button').forEach(b=>{
+    const isActive = b.getAttribute('data-lang') === lang;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  const langLabel = document.getElementById('langSwitchLabel');
+  if(langLabel) langLabel.textContent = lang.toUpperCase();
+  try{ localStorage.setItem('vq_lang', lang); }catch(e){}
+  renderCartBadge();
+  renderCartDrawer();
+  renderLatestCarousel();
+}
+
+/* ---- Language switch dropdown, cart wiring, mobile-nav toggle, header-height
+   sync: all shared IIFEs now live in assets/js/cart.js ---- */
+(function(){
+  let saved = 'fr';
+  try{ saved = localStorage.getItem('vq_lang') || 'fr'; }catch(e){}
+  setLang(saved);
+})();
+</script>
+</body>
+</html>
